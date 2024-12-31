@@ -391,8 +391,20 @@ namespace {projectNamespace}.Entities.Models
             var controllersPath = Path.Combine(projectPath, "Controllers");
             _fileService.CreateDirectory(controllersPath);
 
-            // Create BaseController
-            var baseControllerContent = $@"using Microsoft.AspNetCore.Mvc;
+            // Determine if it's Onion or N-Layer based on project namespace
+            bool isOnion = projectPath.Contains(".API") && (projectPath.Contains(".Domain") || projectPath.Contains(".Application"));
+
+            // Create BaseController with appropriate namespaces
+            var baseControllerContent = isOnion ?
+                CreateOnionBaseController(projectNamespace) :
+                CreateNLayerBaseController(projectNamespace);
+
+            _fileService.WriteAllText(Path.Combine(controllersPath, "BaseController.cs"), baseControllerContent);
+        }
+
+        private string CreateNLayerBaseController(string projectNamespace)
+        {
+            return $@"using Microsoft.AspNetCore.Mvc;
 using {projectNamespace}.Core.Interfaces;
 using {projectNamespace}.Business.Services;
 
@@ -455,7 +467,74 @@ namespace {projectNamespace}.API.Controllers
         }}
     }}
 }}";
-            _fileService.WriteAllText(Path.Combine(controllersPath, "BaseController.cs"), baseControllerContent);
+        }
+
+        private string CreateOnionBaseController(string projectNamespace)
+        {
+            return $@"using Microsoft.AspNetCore.Mvc;
+using {projectNamespace}.Domain.Entities;
+using {projectNamespace}.Application.Services;
+using {projectNamespace}.Application.Interfaces;
+
+namespace {projectNamespace}.API.Controllers
+{{
+    [ApiController]
+    [Route(""api/[controller]"")]
+    public abstract class BaseController<T> : ControllerBase where T : BaseEntity
+    {{
+        protected readonly IService<T> _service;
+
+        protected BaseController(IService<T> service)
+        {{
+            _service = service;
+        }}
+
+        [HttpGet]
+        public virtual async Task<IActionResult> GetAll()
+        {{
+            var entities = await _service.GetAllAsync();
+            return Ok(entities);
+        }}
+
+        [HttpGet(""{{id}}"")]
+        public virtual async Task<IActionResult> GetById(int id)
+        {{
+            var entity = await _service.GetByIdAsync(id);
+            if (entity == null)
+                return NotFound();
+
+            return Ok(entity);
+        }}
+
+        [HttpPost]
+        public virtual async Task<IActionResult> Create([FromBody] T entity)
+        {{
+            await _service.AddAsync(entity);
+            return CreatedAtAction(nameof(GetById), new {{ id = entity.Id }}, entity);
+        }}
+
+        [HttpPut(""{{id}}"")]
+        public virtual async Task<IActionResult> Update(int id, [FromBody] T entity)
+        {{
+            if (id != entity.Id)
+                return BadRequest();
+
+            await _service.UpdateAsync(entity);
+            return NoContent();
+        }}
+
+        [HttpDelete(""{{id}}"")]
+        public virtual async Task<IActionResult> Delete(int id)
+        {{
+            var entity = await _service.GetByIdAsync(id);
+            if (entity == null)
+                return NotFound();
+
+            await _service.DeleteAsync(entity);
+            return NoContent();
+        }}
+    }}
+}}";
         }
 
         private void CreateDomainFiles(string projectPath)
